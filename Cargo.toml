@@ -1,0 +1,26 @@
+[package]
+name = "aabb-tree"
+version = "0.1.0"
+authors = ["Lucas Bittencourt de Souza <lbittencs@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/lukebitts/aabb-tree"
+documentation = "https://docs.rs/aabb-tree/0.1"
+description = """
+This crate is the implementation of a dynamic bounding volume tree based on
+axis aligned bounding boxes. It is a spatial structure with support for
+querying objects based on their position and size inside the tree.
+This work is based on Presson's btDbvt written for Bullet Physics and
+Catto's `b2DynamicTree` written for Box2D.
+"""
+categories = ["aabb", "tree", "spatial"]
+
+[features]
+default = ["test_tools"]
+test_tools = [ "clippy", "quickcheck", "quickcheck_macros" ]
+
+[dependencies]
+num = "0.1"
+rand = "0.3"
+clippy = {version = "*", optional = true}
+quickcheck = {version="*", optional = true}
+quickcheck_macros = {version = "*", optional = true}

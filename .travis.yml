@@ -9,9 +9,6 @@ matrix:
 
 script:
     - |
-        cargo build
-
-after_success:
-  if [ "$TRAVIS_RUST_VERSION" == "nightly" ]; then
-    cargo test --features "test_tools";
-  fi
+        cargo build && if [ "$TRAVIS_RUST_VERSION" == "nightly" ]; then
+          cargo test --features "test_tools";
+        fi

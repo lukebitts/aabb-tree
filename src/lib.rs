@@ -604,8 +604,10 @@ impl<T> AabbTree<T> {
 	/// indicating wether the query should continue or not. The method is a specialized version
 	/// of `AabbTree::query`, where `search` is defined as `|other_aabb| other_aabb.overlaps(aabb)`
 
-	pub fn query_aabb<F: Fn(Proxy) -> bool>(&self, aabb: &Aabb_, callback: F) {
-		self.query(|other_aabb| other_aabb.overlaps(aabb), callback);
+	pub fn query_aabb<F: FnMut(Proxy) -> bool>(&self, aabb: &Aabb_, callback: F) {
+		self.query(|other_aabb| {
+			other_aabb.overlaps(aabb)
+		}, callback);
 	}
 	/// Searchs the AABB using a generic `search` function. `search` receives the current
 	/// AABB being analyzed and should return true if that AABB is within your search
@@ -613,8 +615,8 @@ impl<T> AabbTree<T> {
 	/// `callback` will be called with the node's proxy id as a parameter. The callback
 	/// returns a boolean value indicating wether the query should continue or not.
 
-	pub fn query<F, S>(&self, search: S, callback: F)
-	where F: Fn(Proxy) -> bool, S: Fn(&Aabb_) -> bool {
+	pub fn query<F, S>(&self, search: S, mut callback: F)
+	where F: FnMut(Proxy) -> bool, S: Fn(&Aabb_) -> bool {
 
 		let mut stack = Vec::new();
 

@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Lucas Bittencourt de Souza <lbittencs@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/lukebitts/aabb-tree"
-documentation = "https://docs.rs/aabb-tree/0.1"
+documentation = "https://lukebitts.github.io/docs/aabb-tree/aabb_tree"
 description = """
 This crate is the implementation of a dynamic bounding volume tree based on
 axis aligned bounding boxes. It is a spatial structure with support for
@@ -24,3 +24,12 @@ rand = "0.3"
 clippy = {version = "*", optional = true}
 quickcheck = {version="*", optional = true}
 quickcheck_macros = {version = "*", optional = true}
+
+[[example]]
+name = "collisions"
+
+[dev-dependencies]
+rand = "0.3"
+glm = "0.2.3"
+piston_window = "*"
+chrono = "0.2"

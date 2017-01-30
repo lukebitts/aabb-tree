@@ -8,5 +8,10 @@ matrix:
     - rust: nightly
 
 script:
-  - |
-        cargo build && cargo test --only nightly --feature "test-tools"
+    - |
+        cargo build
+
+after_success:
+  if ([ "$TRAVIS_RUST_VERSION" == "nightly" ]) then
+    cargo test --feature "test-tools"
+  fi

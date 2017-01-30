@@ -45,5 +45,4 @@ fn main() {
 ## Limitations
 
 This is still a work in progress and it is likely the API will change. Right now
-the tree uses `f32`s only and there is some boilerplate when interacting with
-the tree.
+the tree uses `f32`s only and there is some boilerplate when using the API.

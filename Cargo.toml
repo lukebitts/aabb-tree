@@ -15,7 +15,7 @@ Catto's `b2DynamicTree` written for Box2D.
 categories = ["aabb", "tree", "spatial"]
 
 [features]
-default = ["test_tools"]
+default = []
 test_tools = [ "clippy", "quickcheck", "quickcheck_macros" ]
 
 [dependencies]

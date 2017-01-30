@@ -641,6 +641,7 @@ impl<T> AabbTree<T> {
 }
 
 
+#[cfg(feature="test_tools")]
 #[cfg(test)]
 mod tests {
 	use super::{AabbTree, NodeStatus, NodeLink, Proxy};

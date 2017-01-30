@@ -19,7 +19,7 @@ default = []
 test_tools = [ "clippy", "quickcheck", "quickcheck_macros" ]
 
 [dependencies]
-num = "0.1"
+num = {version = "0.1", default-features = false}
 rand = "0.3"
 clippy = {version = "*", optional = true}
 quickcheck = {version="*", optional = true}

@@ -13,5 +13,5 @@ script:
 
 after_success:
   if [ "$TRAVIS_RUST_VERSION" == "nightly" ]; then
-    cargo test --feature "test-tools"
+    cargo test --feature "test-tools";
   fi

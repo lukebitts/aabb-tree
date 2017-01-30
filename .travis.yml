@@ -9,4 +9,4 @@ matrix:
 
 script:
   - |
-        cargo build && cargo test
+        cargo build && cargo test --only nightly --feature "test-tools"

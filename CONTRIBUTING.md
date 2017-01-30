@@ -1,4 +1,4 @@
-# Contributing to Luck
+# Contributing
 
 I welcome contributions to the project. Please open an issue or send a pull
 request.

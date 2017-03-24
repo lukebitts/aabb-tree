@@ -13,7 +13,7 @@
 //! This crate is the implementation of a dynamic bounding volume tree based on
 //! axis aligned bounding boxes. It is a spatial structure with support for
 //! querying objects based on their position and size inside the tree.
-//! This work is based on Presson's btDbvt written for Bullet Physics and
+//! This work is based on Presson's `btDbvt` written for Bullet Physics and
 //! Catto's `b2DynamicTree` written for Box2D.
 
 #[cfg(feature="test_tools")]
@@ -35,7 +35,24 @@ fn min<T: num::Float>(v1: T, v2: T) -> T {
 	else { v1 }
 }
 
-type Aabb_ = ((f32, f32, f32), (f32, f32, f32));
+/// How the tree represents AABBs internally
+pub type MinMaxTuple<P> = ((P, P, P), (P, P, P));
+
+impl<P: num::Float> Aabb for MinMaxTuple<P> {
+	type Precision = P;
+	fn with_params(
+		min: (Self::Precision, Self::Precision, Self::Precision),
+		max: (Self::Precision, Self::Precision, Self::Precision)
+	) -> Self where Self: Sized {
+		(min, max)
+	}
+	fn min(&self) -> (Self::Precision, Self::Precision, Self::Precision) {
+		self.0
+	}
+	fn max(&self) -> (Self::Precision, Self::Precision, Self::Precision) {
+		self.1
+	}
+}
 
 /// An easily copyable type that represents a value inside the tree
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -44,9 +61,6 @@ pub struct Proxy {
 }
 
 impl Proxy {
-	fn empty() -> Proxy {
-		Proxy{v: 0}
-	}
 	fn new(v: usize) -> Proxy {
 		Proxy{v: v}
 	}
@@ -65,63 +79,33 @@ enum NodeLink {
 /// Defines the status of the node, since a node is either a Leaf or a Parent.
 /// These values are never wrong, if a node is a Parent, both child are guaranteed to exist
 /// and to be valid, otherwise the node is a Leaf and the data is accessible.
+#[derive(Clone, Debug)]
 enum NodeStatus<T> {
 	Parent(Proxy, Proxy),
 	Leaf(T)
 }
 
-impl<T> Clone for NodeStatus<T>
-where T: Clone {
-	fn clone(&self) -> NodeStatus<T> {
-		match *self {
-			NodeStatus::Parent(ref c1, ref c2) => NodeStatus::Parent(*c1, *c2),
-			NodeStatus::Leaf(ref v) => NodeStatus::Leaf(v.clone())
-		}
-	}
-}
-
-impl<T> Debug for NodeStatus<T> where T: Debug {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		match *self {
-			NodeStatus::Parent(ref c1, ref c2) => write!(f, "Parent({}, {})", c1.v, c2.v),
-			NodeStatus::Leaf(ref t) => write!(f, "Leaf({:?})", t)
-		}
-	}
-}
-
-struct Node<T>  {
+#[derive(Clone, Debug)]
+struct Node<T, P>
+where P: num::Float + num::FromPrimitive
+{
 	height: usize,
-	aabb: Aabb_,
+	aabb: MinMaxTuple<P>,
 	status: NodeStatus<T>,
 	link: NodeLink,
 }
 
-impl<T> Debug for Node<T>
-	where T: Debug {
-		fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-			write!(f, "Node{{ height: {}, aabb: {:?}, status: {:?}, link: {:?} }}", self.height, self.aabb, self.status, self.link)
-		}
-}
+impl<T, P> Node<T, P>
+where P: num::Float + num::FromPrimitive
+{
+	fn new(status: NodeStatus<T>) -> Self {
+		let z = P::from_f64(0.0).expect("f64 to P");
 
-impl<T> Clone for Node<T>
-where T: Clone {
-	fn clone(&self) -> Node<T> {
-		Node {
-			height: self.height,
-			aabb: self.aabb,
-			status: self.status.clone(),
-			link: self.link.clone()
-		}
-	}
-}
-
-impl<T> Node<T> {
-	fn new() -> Self {
-		Node {
+		Node::<T, P> {
 			height: 0,
-			aabb: ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)),
-			status: NodeStatus::Parent(Proxy::empty(), Proxy::empty()),
-			link: NodeLink::Next(None)
+			aabb: ((z, z, z), (z, z, z)),
+			status: status,
+			link: NodeLink::Next(None),
 		}
 	}
 	fn is_leaf(&self) -> bool {
@@ -134,25 +118,41 @@ impl<T> Node<T> {
 	}
 }
 
-/// A dynamic spatial tree. Data is arranged in a binary tree and allows AABB,
-/// frustum and raycast queries. The proxies returned from the various methods
-/// are leaves in the tree.
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum RotateDirection {
+	Left,
+	Right
+}
+
+/// A dynamic spatial tree. Data is arranged in a binary tree which allows fast positional queries.
+/// The proxies returned from the various methods are leaves in the tree.
 ///
 /// #Panics
 ///
-/// AABB operations are checked for validity and will panic if `aabb.is_valid()`
+/// AABB operations are checked for validity and will panic in debug mode if `aabb.is_valid()`
 /// returns false.
 #[derive(Clone)]
-pub struct AabbTree<T> {
+pub struct AabbTree<T, P = f32, A = MinMaxTuple<f32>>
+where P: num::Float + num::FromPrimitive,
+	  A: Into<MinMaxTuple<P>> + From<MinMaxTuple<P>> + Clone
+{
 	root: Option<Proxy>,
-	nodes: Vec<Node<T>>,
+	nodes: Vec<Node<T, P>>,
 	free_list: Option<Proxy>,
+	_p: ::std::marker::PhantomData<A>
 }
 
-impl<T> Debug for AabbTree<T>
-	where T: Debug {
+impl<T, P, A> Debug for AabbTree<T, P, A>
+where T: Debug,
+	  P: num::Float + num::FromPrimitive + Debug,
+	  A: Into<MinMaxTuple<P>> + From<MinMaxTuple<P>> + Clone + Debug
+{
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		fn postorder<T: Debug>(f: &mut std::fmt::Formatter, tree: &AabbTree<T>, node: &Node<T>, ident: i32, count: i32) {
+		fn postorder<T, P, A>(f: &mut std::fmt::Formatter, tree: &AabbTree<T, P, A>, node: &Node<T, P>, ident: i32, count: i32)
+		where T: Debug,
+			  P: num::Float + num::FromPrimitive + Debug,
+			  A: Into<MinMaxTuple<P>> + From<MinMaxTuple<P>> + Clone + Debug
+		{
 			for _ in 0..ident { print!(" "); }
 			match node.status {
 				NodeStatus::Parent(c1, c2) => {
@@ -170,49 +170,51 @@ impl<T> Debug for AabbTree<T>
 	}
 }
 
-impl<T> AabbTree<T> {
+impl<T, P, A> AabbTree<T, P, A>
+where P: num::Float + num::FromPrimitive,
+	  A: Into<MinMaxTuple<P>> + From<MinMaxTuple<P>> + Clone
+{
 	/// Returns a new AABB
 	#[inline]
 	pub fn new() -> Self {
 		AabbTree {
 			root: None,
 			nodes: Vec::new(),
-			free_list: None
+			free_list: None,
+			_p: ::std::marker::PhantomData
 		}
 	}
 
-	fn extended_aabb(aabb: &Aabb_, extension: f32) -> Aabb_ {
+	fn extended_aabb(aabb: &MinMaxTuple<P>, extension: P) -> MinMaxTuple<P> {
+		use aabb::Aabb;
 		let min = (aabb.min().0 - extension, aabb.min().1 - extension, aabb.min().2 - extension);
 		let max = (aabb.max().0 + extension, aabb.max().1 + extension, aabb.max().2 + extension);
 
 		(min, max)
 	}
 
-	fn combined_aabb(a1: &Aabb_, a2: &Aabb_) -> Aabb_ {
+	fn combined_aabb(a1: &MinMaxTuple<P>, a2: &MinMaxTuple<P>) -> MinMaxTuple<P> {
 		(
 			(min(a1.min().0, a2.min().0), min(a1.min().1, a2.min().1), min(a1.min().2, a2.min().2)),
 			(max(a1.max().0, a2.max().0), max(a1.max().1, a2.max().1), max(a1.max().2, a2.max().2))
 		)
 	}
 
-	fn allocate_node(&mut self) -> Proxy {
-		self.free_list.or_else(
-			||{
-				let node = Node::new();
-				self.nodes.push(node);
-				Some(Proxy::new(self.nodes.len() - 1))
-			}
-		).and_then(
-			|proxy|{
-				let node = &self.nodes[proxy.v];
-				self.free_list = match node.link {
-					NodeLink::Next(next) => next,
-					_ => unreachable!("Node link should be Next")
-				};
+	fn allocate_node(&mut self, status: NodeStatus<T>) -> Proxy {
 
-				Some(proxy)
-			}
-		).expect("node allocation")
+		let proxy = self.free_list.unwrap_or_else(||{
+			let node = Node::new(status);
+			self.nodes.push(node);
+			Proxy::new(self.nodes.len() - 1)
+		});
+
+		let node = &self.nodes[proxy.v];
+		self.free_list = match node.link {
+			NodeLink::Next(next) => next,
+			_ => unreachable!("Node link should be Next")
+		};
+
+		proxy
 	}
 
 	fn free_node(&mut self, proxy: Proxy) {
@@ -230,104 +232,106 @@ impl<T> AabbTree<T> {
 		assert!(self.free_list.is_some());
 	}
 
-	fn balance2(&mut self, i_a: Proxy, i_s0: Proxy, i_s1: Proxy, swap_child: bool) -> Proxy {
+	fn rotate(&mut self, parent: Proxy, rotation: RotateDirection) {
 		let nodes_len = self.nodes.len();
 
-		let (i_f, i_g) = match self.nodes[i_s0.v].status {
+		let (child1, child2) = match (rotation, &self.nodes[parent.v].status) {
+			(RotateDirection::Left,  &NodeStatus::Parent(c1, c2)) => (c1, c2),
+			(RotateDirection::Right, &NodeStatus::Parent(c1, c2)) => (c2, c1),
+			_ => unreachable!("node to rotate is not a parent")
+		};
+
+		let (child1_child_left, child1_child_right) = match self.nodes[child1.v].status {
 			NodeStatus::Parent(c1, c2) => (c1, c2),
 			_ => unreachable!("node to be balanced has no children")
 		};
 
-		assert!(i_f.v < nodes_len && i_g.v < nodes_len);
+		assert!(child1_child_left.v < nodes_len && child1_child_right.v < nodes_len);
 
+		self.nodes[child1.v].status = NodeStatus::Parent(parent, child1_child_right);
+		self.nodes[child1.v].link = self.nodes[parent.v].link.clone();
+		self.nodes[parent.v].link = NodeLink::Parent(Some(child1));
 
-		self.nodes[i_s0.v].status = NodeStatus::Parent(i_a, i_g);
-		self.nodes[i_s0.v].link = self.nodes[i_a.v].link.clone();
-		self.nodes[i_a.v].link = NodeLink::Parent(Some(i_s0));
+		assert!(!self.nodes[child1.v].is_leaf());
 
-		assert!(!self.nodes[i_s0.v].is_leaf());
-
-		match self.nodes[i_s0.v].link {
+		match self.nodes[child1.v].link {
 			NodeLink::Parent(Some(p)) => {
 				self.nodes[p.v].status = match self.nodes[p.v].status {
 					NodeStatus::Parent(c1, c2) => {
-						if c1 == i_a {
-							NodeStatus::Parent(i_s0, c2)
+						if c1 == parent {
+							NodeStatus::Parent(child1, c2)
 						}
 						else {
-							assert!(c2 == i_a);
-							NodeStatus::Parent(c1, i_s0)
+							assert!(c2 == parent);
+							NodeStatus::Parent(c1, child1)
 						}
 					}
 					_ => unreachable!("parent has no children")
 				};
 			}
 			NodeLink::Parent(None) => {
-				self.root = Some(i_s0);
+				self.root = Some(child1);
 			}
 			_ => unreachable!("node to be balanced is not a parent")
 		}
 
-		let (i_t1, i_t2) = if self.nodes[i_f.v].height > self.nodes[i_g.v].height {
-			(i_f, i_g)
+		let (i_t1, i_t2) = if self.nodes[child1_child_left.v].height > self.nodes[child1_child_right.v].height {
+			(child1_child_left, child1_child_right)
 		}
 		else {
-			(i_g, i_f)
+			(child1_child_right, child1_child_left)
 		};
 
-		if let NodeStatus::Parent(c1, _) = self.nodes[i_s0.v].status {
-			self.nodes[i_s0.v].status = NodeStatus::Parent(c1, i_t1);
-		}
-		else { unreachable!("node to be balanced is not a parent") }
-		if let NodeStatus::Parent(c1, c2) = self.nodes[i_a.v].status {
-			if swap_child {
-				self.nodes[i_a.v].status = NodeStatus::Parent(i_t2, c2);
-			}
-			else {
-				self.nodes[i_a.v].status = NodeStatus::Parent(c1, i_t2);
+		self.nodes[child1.v].status = NodeStatus::Parent(parent, i_t1);
+
+		if let NodeStatus::Parent(c1, c2) = self.nodes[parent.v].status {
+			match rotation {
+				RotateDirection::Left => self.nodes[parent.v].status = NodeStatus::Parent(i_t2, c2),
+				RotateDirection::Right => self.nodes[parent.v].status = NodeStatus::Parent(c1, i_t2)
 			}
 		}
 		else { unreachable!("node to be balanced is not a parent") };
-		self.nodes[i_t2.v].link = NodeLink::Parent(Some(i_a));
+		self.nodes[i_t2.v].link = NodeLink::Parent(Some(parent));
 
-		let (temp_aabb1, temp_aabb2) = (self.nodes[i_s1.v].aabb, self.nodes[i_t2.v].aabb);
-		self.nodes[i_a.v].aabb = Self::combined_aabb(&temp_aabb1, &temp_aabb2);
-		let (temp_aabb1, temp_aabb2) = (self.nodes[i_a.v].aabb, self.nodes[i_t1.v].aabb);
-		self.nodes[i_s0.v].aabb = Self::combined_aabb(&temp_aabb1, &temp_aabb2);
+		let (temp_aabb1, temp_aabb2) = (self.nodes[child2.v].aabb.into(), self.nodes[i_t2.v].aabb.into());
+		self.nodes[parent.v].aabb = Self::combined_aabb(&temp_aabb1, &temp_aabb2);
+		let (temp_aabb1, temp_aabb2) = (self.nodes[parent.v].aabb.into(), self.nodes[i_t1.v].aabb.into());
+		self.nodes[child1.v].aabb = Self::combined_aabb(&temp_aabb1, &temp_aabb2);
 
-		self.nodes[i_a.v].height = 1 + std::cmp::max(self.nodes[i_s1.v].height, self.nodes[i_t2.v].height);//max(, );
-		self.nodes[i_s0.v].height = 1 + std::cmp::max(self.nodes[i_a.v].height, self.nodes[i_t1.v].height);
-
-		i_s0
+		self.nodes[parent.v].height = 1 + std::cmp::max(self.nodes[child2.v].height, self.nodes[i_t2.v].height);
+		self.nodes[child1.v].height = 1 + std::cmp::max(self.nodes[parent.v].height, self.nodes[i_t1.v].height);
 	}
 
-	fn balance(&mut self, i_a: Proxy) -> Proxy {
-		assert!(i_a.v < self.nodes.len());
+	fn balance(&mut self, proxy: Proxy) -> Proxy {
+		assert!(proxy.v < self.nodes.len());
 
 		let nodes_len = self.nodes.len();
 
-		if self.nodes[i_a.v].is_leaf() || self.nodes[i_a.v].height < 2 {
-			return i_a
+		if self.nodes[proxy.v].is_leaf() || self.nodes[proxy.v].height < 2 {
+			return proxy
 		}
 
-		let (i_b, i_c) = match self.nodes[i_a.v].status {
+		let (child_left, child_right) = match self.nodes[proxy.v].status {
 			NodeStatus::Parent(c1, c2) => (c1, c2),
 			_ => unreachable!("node to be balanced has no children")
 		};
 
-		assert!(i_b.v < nodes_len && i_c.v < nodes_len);
+		assert!(child_left.v < nodes_len && child_right.v < nodes_len);
 
-		let higher_c = self.nodes[i_c.v].height > self.nodes[i_b.v].height;
-		let higher_b = self.nodes[i_b.v].height > self.nodes[i_c.v].height;
 
-		if higher_c && (self.nodes[i_c.v].height - self.nodes[i_b.v].height > 1) {
-			return self.balance2(i_a, i_c, i_b, false);
+		let higher_left  = self.nodes[child_left.v].height > self.nodes[child_right.v].height;
+		let higher_right = self.nodes[child_right.v].height > self.nodes[child_left.v].height;
+
+		if higher_right && (self.nodes[child_right.v].height - self.nodes[child_left.v].height > 1) {
+			self.rotate(proxy, RotateDirection::Right);
+			return child_right
 		}
-		else if higher_b && (self.nodes[i_b.v].height - self.nodes[i_c.v].height > 1) {
-			return self.balance2(i_a, i_b, i_c, true);
+		else if higher_left && (self.nodes[child_left.v].height - self.nodes[child_right.v].height > 1) {
+			self.rotate(proxy, RotateDirection::Left);
+			return child_left
 		}
 
-		i_a
+		proxy
 	}
 
 	fn insert_leaf(&mut self, leaf: Proxy) {
@@ -350,8 +354,9 @@ impl<T> AabbTree<T> {
 			let combined_aabb = Self::combined_aabb(&self.nodes[index.v].aabb, &leaf_aabb);
 			let combined_area = combined_aabb.perimeter();
 
-			let cost = 2.0f32 * combined_area;
-			let inheritance_cost = 2.0f32 * (combined_area - area);
+			let two = P::from_f64(2.0).expect("f64 to P");
+			let cost = two * combined_area;
+			let inheritance_cost = two * (combined_area - area);
 
 			let cost1 = if self.nodes[child1.v].is_leaf() {
 				let aabb = Self::combined_aabb(&leaf_aabb, &self.nodes[child1.v].aabb);
@@ -392,7 +397,15 @@ impl<T> AabbTree<T> {
 			NodeLink::Parent(p) => p,
 			_ => unreachable!("sibling status is not parent")
 		};
-		let new_parent = self.allocate_node();
+
+		//let new_parent = self.allocate_node();
+		//self.nodes[new_parent.v].link = NodeLink::Parent(old_parent);
+
+		//let temp_aabb = self.nodes[sibling.v].aabb;
+		//self.nodes[new_parent.v].aabb = Self::combined_aabb(&leaf_aabb, &temp_aabb);
+		//self.nodes[new_parent.v].height = self.nodes[sibling.v].height + 1;
+
+		let new_parent = self.allocate_node(NodeStatus::Parent(sibling, leaf));
 		self.nodes[new_parent.v].link = NodeLink::Parent(old_parent);
 
 		let temp_aabb = self.nodes[sibling.v].aabb;
@@ -418,7 +431,7 @@ impl<T> AabbTree<T> {
 			}
 		}
 
-		self.nodes[new_parent.v].status = NodeStatus::Parent(sibling, leaf);
+		//self.nodes[new_parent.v].status = NodeStatus::Parent(sibling, leaf);
 		self.nodes[sibling.v].link = NodeLink::Parent(Some(new_parent));
 		self.nodes[leaf.v].link = NodeLink::Parent(Some(new_parent));
 
@@ -516,16 +529,16 @@ impl<T> AabbTree<T> {
 			}
 		}
 	}
-	/// Creates a new node in the tree.
 
-	pub fn create_proxy(&mut self, mut aabb: Aabb_, user_data: T) -> Proxy {
-		let proxy = self.allocate_node();
+	/// Creates a new node in the tree.
+	pub fn create_proxy(&mut self, aabb: A, user_data: T) -> Proxy {
+		let proxy = self.allocate_node(NodeStatus::Leaf(user_data));
 
 		self.nodes.get_mut(proxy.v).and_then(|node|{
-			aabb = Self::extended_aabb(&aabb, 0.1f32);
+			let aabb = Self::extended_aabb(&aabb.into(), P::from_f64(0.1).expect("f64 to P"));
 
 			node.aabb = aabb;
-			node.status = NodeStatus::Leaf(user_data);
+			//node.status = NodeStatus::Leaf(user_data);
 			//node.height = 0;
 			assert!(node.height == 0);
 
@@ -535,13 +548,13 @@ impl<T> AabbTree<T> {
 		self.insert_leaf(proxy);
 		proxy
 	}
+
 	/// Destroy a node in the tree. Does not deallocate memory, nodes can be reutilized
 	/// on later `create_proxy` calls.
 	/// # Panics
 	///
 	/// Panics if the proxy_id is not valid (either was destroyed already or is not a leaf).
 	/// Use proxies returned by `create_proxy` to avoid problems.
-
 	pub fn destroy_proxy(&mut self, proxy: Proxy) {
 		assert!(proxy.v < self.nodes.len());
 		assert!(self.nodes[proxy.v].is_leaf());
@@ -549,6 +562,7 @@ impl<T> AabbTree<T> {
 		self.remove_leaf(proxy);
 		self.free_node(proxy);
 	}
+
 	/// Changes the AABB of a node, might trigger a tree rebalance if the new AABB
 	/// doesn't fit within the node's parent AABB.
 	///
@@ -556,12 +570,11 @@ impl<T> AabbTree<T> {
 	///
 	/// Panics if the proxy_id is not valid (either was destroyed already or is not a leaf).
 	/// Use proxies returned by `create_proxy` to avoid problems.
-
-	pub fn set_aabb(&mut self, proxy: Proxy, new_aabb: &Aabb_) {
+	pub fn set_aabb(&mut self, proxy: Proxy, new_aabb: &A) {
 		assert!(proxy.v < self.nodes.len());
 		assert!(self.nodes[proxy.v].is_leaf());
 
-		let new_aabb = Self::extended_aabb(new_aabb, 0.1f32);
+		let new_aabb = Self::extended_aabb(&(*new_aabb).clone().into(), P::from_f64(0.1).expect("f64 to P"));
 		self.nodes[proxy.v].aabb = new_aabb;
 
 		match self.nodes[proxy.v].link {
@@ -577,9 +590,9 @@ impl<T> AabbTree<T> {
 		self.remove_leaf(proxy);
 		self.insert_leaf(proxy);
 	}
+
 	/// Returns a reference to the user data associated with the `proxy_id`. Returns
 	/// `None` if the `proxy_id` is invalid.
-
 	pub fn user_data(&self, proxy: Proxy) -> Option<&T> {
 		self.nodes.get(proxy.v).and_then(|node| {
 			match node.status {
@@ -588,9 +601,9 @@ impl<T> AabbTree<T> {
 			}
 		})
 	}
+
 	/// Returns a mutable reference to the user data associated with the `proxy_id`. Returns
 	/// `None` if the `proxy_id` is invalid.
-
 	pub fn user_data_mut(&mut self, proxy: Proxy) -> Option<&mut T> {
 		self.nodes.get_mut(proxy.v).and_then(|mut node| {
 			match node.status {
@@ -599,24 +612,26 @@ impl<T> AabbTree<T> {
 			}
 		})
 	}
-	/// Searchs the AABB for every node that overlaps with `aabb` and calls the `callback`
+
+	/// Searchs the tree for every node that overlaps with `aabb` and calls the `callback`
 	/// with the node's proxy id as a parameter. The callback returns a boolean value
 	/// indicating wether the query should continue or not. The method is a specialized version
 	/// of `AabbTree::query`, where `search` is defined as `|other_aabb| other_aabb.overlaps(aabb)`
-
-	pub fn query_aabb<F: FnMut(Proxy) -> bool>(&self, aabb: &Aabb_, callback: F) {
+	pub fn query_aabb<F: FnMut(Proxy) -> bool>(&self, aabb: &A, callback: F) {
 		self.query(|other_aabb| {
-			other_aabb.overlaps(aabb)
+			let other_aabb : MinMaxTuple<P> = (*other_aabb).clone().into();
+			let aabb : MinMaxTuple<P> = (*aabb).clone().into();
+			other_aabb.overlaps(&aabb)
 		}, callback);
 	}
+
 	/// Searchs the AABB using a generic `search` function. `search` receives the current
 	/// AABB being analyzed and should return true if that AABB is within your search
 	/// constraints. Once a leaf node is found and `search` returns true for that node,
 	/// `callback` will be called with the node's proxy id as a parameter. The callback
 	/// returns a boolean value indicating wether the query should continue or not.
-
-	pub fn query<F, S>(&self, search: S, mut callback: F)
-	where F: FnMut(Proxy) -> bool, S: Fn(&Aabb_) -> bool {
+	pub fn query<F, S>(&self, mut search: S, mut callback: F)
+	where F: FnMut(Proxy) -> bool, S: FnMut(&A) -> bool {
 
 		let mut stack = Vec::new();
 
@@ -625,7 +640,7 @@ impl<T> AabbTree<T> {
 		}
 
 		while let Some(node_id) = stack.pop() {
-			if search(&self.nodes[node_id.v].aabb) {
+			if search(&self.nodes[node_id.v].aabb.into()) {
 				match self.nodes[node_id.v].status {
 					NodeStatus::Leaf(_) => {
 						if !callback(node_id) {
@@ -651,10 +666,10 @@ mod tests {
 	use quickcheck;
 
 	type Vec3 = (f32, f32, f32);
-	type Aabb_ = (Vec3, Vec3);
+	type A = (Vec3, Vec3);
 
 	/// Returns either a random `AabbTree` or a `quickcheck::TestResult` if the tree is empty.
-	fn random_tree(aabbs: Vec<Aabb_>) -> Result<AabbTree<i32>, quickcheck::TestResult> {
+	fn random_tree(aabbs: Vec<A>) -> Result<AabbTree<i32>, quickcheck::TestResult> {
 		let mut tree = AabbTree::new();
 
 		for (i, aabb) in aabbs.iter().filter(|aabb| aabb.is_valid()).enumerate() {
@@ -669,11 +684,11 @@ mod tests {
 	/// * Structural validation
 	/// Validates every node, checking if the status and links are correct.
 	/// * Metrics validation
-	/// Makes sure the combined AABB of two children in equal to the parent's AABB and the height
+	/// Makes sure the combined AABB of two children is equal to the parent's AABB, and that the height
 	/// is correct.
 	#[test]
 	fn validation() {
-		fn tree_validation(aabbs: Vec<Aabb_>) -> quickcheck::TestResult {
+		fn tree_validation(aabbs: Vec<A>) -> quickcheck::TestResult {
 			let tree = match random_tree(aabbs) {
 				Ok(tree) => tree,
 				Err(res) => return res
@@ -739,12 +754,12 @@ mod tests {
 			)
 		}
 
-		quickcheck::quickcheck(tree_validation as fn(Vec<Aabb_>) -> quickcheck::TestResult);
+		quickcheck::quickcheck(tree_validation as fn(Vec<A>) -> quickcheck::TestResult);
 	}
 
 	/// Checks if every proxy has a status of `Leaf`
 	#[test]
-	fn inserted_is_leaf() {
+	fn inserted_is_leaf2() {
 		fn tree_insertion(n: i32) -> bool {
 			let mut tree : AabbTree<i32> = AabbTree::new();
 
@@ -776,13 +791,13 @@ mod tests {
 	/// parents.
 	#[test]
 	fn insertion_size() {
-		fn tree_insertion(aabbs: Vec<Aabb_>) -> quickcheck::TestResult {
+		fn tree_insertion(aabbs: Vec<A>) -> quickcheck::TestResult {
 			let tree = match random_tree(aabbs) {
 				Ok(tree) => tree,
 				Err(res) => return res
 			};
 
-			fn test_aabb_sizes<T: ::std::fmt::Debug>(t: &AabbTree<T>, n: Proxy, mut parent_aabb: Option<Aabb_>) -> bool {
+			fn test_aabb_sizes<T: ::std::fmt::Debug>(t: &AabbTree<T>, n: Proxy, mut parent_aabb: Option<A>) -> bool {
 				parent_aabb = match parent_aabb {
 					None => Some(t.nodes[n.v].aabb),
 					Some(aabb) => {
@@ -812,6 +827,6 @@ mod tests {
 			quickcheck::TestResult::from_bool(test_aabb_sizes(&tree, tree.root.expect("root"), None))
 		}
 
-		quickcheck::quickcheck(tree_insertion as fn(Vec<Aabb_>) -> quickcheck::TestResult);
+		quickcheck::quickcheck(tree_insertion as fn(Vec<A>) -> quickcheck::TestResult);
 	}
 }

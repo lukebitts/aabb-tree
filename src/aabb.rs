@@ -20,7 +20,7 @@ fn vec3_num_mul<T: Copy + Mul<Output=T>>(v: (T, T, T), n: T) -> (T, T, T) {
 
 /// A trait that AABB types should implement to be used within the `AabbTree`. Has some
 /// convenience methods already defined.
-pub trait Aabb : Clone {
+pub trait Aabb {
 	/// Defines the precision of the AABB (and consequently of the `AabbTree`). While
 	/// any numerical type can be used, the tree might behave weirdly when given non
 	/// float types.
@@ -116,7 +116,7 @@ pub trait Aabb : Clone {
 	}
 }
 
-impl Aabb for ((f32, f32, f32), (f32, f32, f32)) {
+/*impl Aabb for ((f32, f32, f32), (f32, f32, f32)) {
 	type Precision = f32;
 	fn with_params(min: (f32, f32, f32), max: (f32, f32, f32)) -> Self {
 		(min, max)
@@ -166,7 +166,7 @@ impl Aabb for [[f64; 3]; 2] {
 	fn max(&self) -> (f64, f64, f64) {
 		(self[1][0], self[1][1], self[1][2])
 	}
-}
+}*/
 
 #[cfg(test)]
 pub mod tests {

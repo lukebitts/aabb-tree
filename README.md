@@ -41,8 +41,3 @@ fn main() {
 	});
 }
 ```
-
-## Limitations
-
-The API is still a little rough, there's some boilerplate when interacting with
-the tree and it uses `f32` internally.

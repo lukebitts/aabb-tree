@@ -9,12 +9,16 @@ description = """
 This crate is the implementation of a dynamic bounding volume tree based on
 axis aligned bounding boxes. It is a spatial structure with support for
 querying objects based on their position and size inside the tree.
-This work is based on Presson's btDbvt written for Bullet Physics and
+This work is based on Presson's `btDbvt` written for Bullet Physics and
 Catto's `b2DynamicTree` written for Box2D.
 """
 categories = ["aabb", "tree", "spatial"]
 
+#[profile.release]
+#debug = true
+
 [features]
+#default = ["test_tools"]
 default = []
 test_tools = [ "clippy", "quickcheck", "quickcheck_macros" ]
 

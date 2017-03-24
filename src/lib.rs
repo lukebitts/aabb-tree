@@ -661,6 +661,7 @@ where P: num::Float + num::FromPrimitive,
 #[cfg(feature="test_tools")]
 #[cfg(test)]
 mod tests {
+	#![allow(warnings)]
 	use super::{AabbTree, NodeStatus, NodeLink, Proxy};
 	use super::aabb::Aabb;
 	use quickcheck;

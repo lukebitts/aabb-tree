@@ -13,4 +13,4 @@ issue or send a pull request to fix them.
 
 Please follow [Rust's code of conduct][coc] when interacting in this repository.
 
-[coc]: https://www.rust-lang.org/conduct.html/
+[coc]: https://www.rust-lang.org/en-US/conduct.html

@@ -19,7 +19,7 @@ categories = ["aabb", "tree", "spatial"]
 
 [features]
 #default = ["test_tools"]
-default = ["test_tools"]
+default = []
 test_tools = [ "clippy", "quickcheck", "quickcheck_macros" ]
 
 [dependencies]

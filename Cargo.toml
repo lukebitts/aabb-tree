@@ -1,6 +1,6 @@
 [package]
 name = "aabb-tree"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Lucas Bittencourt de Souza <lbittencs@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/lukebitts/aabb-tree"
@@ -28,6 +28,9 @@ rand = "0.3"
 clippy = {version = "*", optional = true}
 quickcheck = {version="*", optional = true}
 quickcheck_macros = {version = "*", optional = true}
+#specs = "0.9"
+statrs = "*"
+noisy_float = "0.1.2"
 
 [[example]]
 name = "collisions"

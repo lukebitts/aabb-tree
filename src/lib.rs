@@ -1,6 +1,6 @@
-#![deny(missing_docs)]
+//#![deny(missing_docs)]
 
-#![cfg_attr(test, deny(warnings))]
+//#![cfg_attr(test, deny(warnings))]
 #![cfg_attr(feature="test_tools", feature(plugin))]
 #![cfg_attr(feature="test_tools", plugin(clippy))]
 #![cfg_attr(feature="test_tools", plugin(quickcheck_macros))]
@@ -18,8 +18,12 @@
 
 #[cfg(feature = "test_tools")]
 extern crate quickcheck;
+#[cfg(feature = "test_tools")]
+extern crate rand;
 
 extern crate num;
+extern crate statrs;
+extern crate noisy_float;
 
 mod aabb;
 use aabb::Aabb;
@@ -36,7 +40,7 @@ fn min<T: num::Float>(v1: T, v2: T) -> T {
 /// How the tree represents AABBs internally
 pub type MinMaxTuple<P> = ((P, P, P), (P, P, P));
 
-impl<P: num::Float> Aabb for MinMaxTuple<P> {
+impl<P: num::Float + ::std::fmt::Debug> Aabb for MinMaxTuple<P> {
     type Precision = P;
     fn with_params(
         min: (Self::Precision, Self::Precision, Self::Precision),
@@ -56,7 +60,7 @@ impl<P: num::Float> Aabb for MinMaxTuple<P> {
 }
 
 /// An easily copyable type that represents a value inside the tree
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Proxy {
     v: usize,
 }
@@ -83,7 +87,7 @@ enum NodeLink {
 #[derive(Clone, Debug)]
 enum NodeStatus<T> {
     Parent(Proxy, Proxy),
-    Leaf(T),
+    Leaf(Option<T>),
 }
 
 #[derive(Clone, Debug)]
@@ -118,6 +122,9 @@ where
             false
         }
     }
+    fn is_parent(&self) -> bool {
+        !self.is_leaf()
+    }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -136,7 +143,7 @@ enum RotateDirection {
 #[derive(Clone)]
 pub struct AabbTree<T, P = f32, A = MinMaxTuple<f32>>
 where
-    P: num::Float + num::FromPrimitive,
+    P: num::Float + num::FromPrimitive + Debug,
     A: Into<MinMaxTuple<P>> + From<MinMaxTuple<P>> + Clone,
 {
     root: Option<Proxy>,
@@ -151,31 +158,47 @@ where T: Debug,
 	  A: Into<MinMaxTuple<P>> + From<MinMaxTuple<P>> + Clone + Debug
 {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		fn postorder<T, P, A>(f: &mut std::fmt::Formatter, tree: &AabbTree<T, P, A>, node: &Node<T, P>, ident: i32, count: i32)
+		fn postorder<T, P, A>(f: &mut std::fmt::Formatter, tree: &AabbTree<T, P, A>, node: &Node<T, P>, proxy: Proxy, ident: i32, count: i32)
 		where T: Debug,
 			  P: num::Float + num::FromPrimitive + Debug,
 			  A: Into<MinMaxTuple<P>> + From<MinMaxTuple<P>> + Clone + Debug
 		{
+            if count > 30 { return }
 			for _ in 0..ident { print!(" "); }
 			match node.status {
 				NodeStatus::Parent(c1, c2) => {
-					let _ = writeln!(f, "> {:?}", node.aabb);
-					postorder(f, tree, &tree.nodes[c1.v], ident + 4, count + 1);
-					postorder(f, tree, &tree.nodes[c2.v], ident + 4, count + 1);
+					let _ = writeln!(f, "parent> |{}| {:?} {:?}", proxy.v, node.link, node.aabb);
+					postorder(f, tree, &tree.nodes[c1.v], c1, ident + 4, count + 1);
+					postorder(f, tree, &tree.nodes[c2.v], c2, ident + 4, count + 1);
 				}
 				NodeStatus::Leaf(ref l) => {
-					let _ = writeln!(f, "{:?} {:?}", l, node.aabb);
+					let _ = writeln!(f, "leaf> {}| {:?} {:?}", proxy.v, l, node.aabb);
 				}
 			}
 		}
-		postorder(f, self, &self.nodes[self.root.unwrap().v], 0, 0);
-		write!(f, "")
+        if let Some(root) = self.root {
+            postorder(f, self, &self.nodes[root.v], root, 0, 0);
+            write!(f, "")
+        }
+        else {
+            Ok(())
+        }
 	}
+}
+
+impl<T, P, A> Default for AabbTree<T, P, A>
+where
+    P: num::Float + num::FromPrimitive + Debug,
+    A: Into<MinMaxTuple<P>> + From<MinMaxTuple<P>> + Clone
+{
+    fn default() -> Self {
+        AabbTree::new()
+    }
 }
 
 impl<T, P, A> AabbTree<T, P, A>
 where
-    P: num::Float + num::FromPrimitive,
+    P: num::Float + num::FromPrimitive + Debug,
     A: Into<MinMaxTuple<P>> + From<MinMaxTuple<P>> + Clone,
 {
     /// Returns a new AABB
@@ -223,12 +246,13 @@ where
     fn allocate_node(&mut self, status: NodeStatus<T>) -> Proxy {
 
         let proxy = self.free_list.unwrap_or_else(|| {
-            let node = Node::new(status);
+            let node = Node::new(NodeStatus::Leaf(None));
             self.nodes.push(node);
             Proxy::new(self.nodes.len() - 1)
         });
 
-        let node = &self.nodes[proxy.v];
+        let mut node = &mut self.nodes[proxy.v];
+        node.status = status;
         self.free_list = match node.link {
             NodeLink::Next(next) => next,
             _ => unreachable!("Node link should be Next"),
@@ -281,7 +305,7 @@ where
                         if c1 == parent {
                             NodeStatus::Parent(child1, c2)
                         } else {
-                            assert!(c2 == parent);
+                            assert_eq!(c2, parent);
                             NodeStatus::Parent(c1, child1)
                         }
                     }
@@ -368,6 +392,7 @@ where
     }
 
     fn insert_leaf(&mut self, leaf: Proxy) {
+
         if self.root.is_none() {
             self.root = Some(leaf);
             self.nodes[leaf.v].link = NodeLink::Parent(None);
@@ -377,7 +402,15 @@ where
         let leaf_aabb = self.nodes[leaf.v].aabb;
         let mut index = self.root.expect("root index");
 
-        while !self.nodes[index.v].is_leaf() {
+        let mut count = 0;
+
+        while !self.nodes[index.v].is_leaf() {            
+            count += 1;
+
+            if count > 30 {
+                panic!();
+            }
+
             let (child1, child2) = match self.nodes[index.v].status {
                 NodeStatus::Parent(c1, c2) => (c1, c2),
                 _ => unreachable!("Node status is not Parent"),
@@ -491,6 +524,7 @@ where
     }
 
     fn remove_leaf(&mut self, leaf: Proxy) {
+
         if Some(leaf) == self.root {
             self.root = None;
             return;
@@ -556,18 +590,17 @@ where
 
     /// Creates a new node in the tree.
     pub fn create_proxy(&mut self, aabb: A, user_data: T) -> Proxy {
-        let proxy = self.allocate_node(NodeStatus::Leaf(user_data));
+        let proxy = self.allocate_node(NodeStatus::Leaf(Some(user_data)));
 
-        self.nodes.get_mut(proxy.v).and_then(|node| {
+        if let Some(node) = self.nodes.get_mut(proxy.v) {
             let aabb = Self::extended_aabb(&aabb.into(), P::from_f64(0.1).expect("f64 to P"));
 
             node.aabb = aabb;
             //node.status = NodeStatus::Leaf(user_data);
             //node.height = 0;
-            assert!(node.height == 0);
-
-            Some(0)
-        });
+            //assert!(match node.link { NodeLink::Next(None) => true, _ => false });
+            assert_eq!(node.height, 0);
+        }
 
         self.insert_leaf(proxy);
         proxy
@@ -579,12 +612,20 @@ where
     ///
     /// Panics if the proxy_id is not valid (either was destroyed already or is not a leaf).
     /// Use proxies returned by `create_proxy` to avoid problems.
-    pub fn destroy_proxy(&mut self, proxy: Proxy) {
+    pub fn destroy_proxy(&mut self, proxy: Proxy) -> T {
         assert!(proxy.v < self.nodes.len());
         assert!(self.nodes[proxy.v].is_leaf());
 
         self.remove_leaf(proxy);
         self.free_node(proxy);
+        
+        let ret = std::mem::replace(&mut self.nodes[proxy.v].status, NodeStatus::Leaf(None));
+
+        match ret {
+            NodeStatus::Leaf(Some(v)) => v,
+            NodeStatus::Leaf(None) => panic!("empty leaf"),
+            _ => unreachable!("proxy is not a leaf")
+        }
     }
 
     /// Changes the AABB of a node, might trigger a tree rebalance if the new AABB
@@ -598,7 +639,7 @@ where
         assert!(proxy.v < self.nodes.len());
         assert!(self.nodes[proxy.v].is_leaf());
 
-        let new_aabb = Self::extended_aabb(
+        /*let new_aabb = Self::extended_aabb(
             &(*new_aabb).clone().into(),
             P::from_f64(0.1).expect("f64 to P"),
         );
@@ -610,19 +651,23 @@ where
                     return;
                 }
             }
-            NodeLink::Parent(None) => {}
+            NodeLink::Parent(None) => return,
             NodeLink::Next(_) => panic!("node is not a part of the tree hierarchy"),
         }
 
-        self.remove_leaf(proxy);
-        self.insert_leaf(proxy);
+        println!("set aabb {}", proxy.v);*/
+
+        //self.remove_leaf(proxy);
+        let x = self.destroy_proxy(proxy);
+        self.create_proxy(new_aabb.clone(), x);
+        //self.insert_leaf(proxy);
     }
 
     /// Returns a reference to the user data associated with the `proxy_id`. Returns
     /// `None` if the `proxy_id` is invalid.
     pub fn user_data(&self, proxy: Proxy) -> Option<&T> {
         self.nodes.get(proxy.v).and_then(|node| match node.status {
-            NodeStatus::Leaf(ref t) => Some(t),
+            NodeStatus::Leaf(Some(ref t)) => Some(t),
             _ => None,
         })
     }
@@ -632,7 +677,7 @@ where
     pub fn user_data_mut(&mut self, proxy: Proxy) -> Option<&mut T> {
         self.nodes.get_mut(proxy.v).and_then(
             |mut node| match node.status {
-                NodeStatus::Leaf(ref mut t) => Some(t),
+                NodeStatus::Leaf(Some(ref mut t)) => Some(t),
                 _ => None,
             },
         )
@@ -686,8 +731,188 @@ where
             }
         }
     }
+
+    /*
+        
+    ColliderPairList &AABBTree::ComputePairs(void)
+    {
+    m_pairs.clear();
+    
+    // early out
+    if (!m_root || m_root->IsLeaf())
+        return m_pairs;
+    
+    // clear Node::childrenCrossed flags
+    ClearChildrenCrossFlagHelper(m_root);
+    
+    // base recursive call
+    ComputePairsHelper(m_root->children[0], 
+                        m_root->children[1]);
+    
+    return m_pairs;
+    }            
+    */
+
+    pub fn compute_pairs(&self, valid_pair_elements: &[Proxy]) -> Vec<(Proxy, Proxy)> {
+
+        let mut pairs = Vec::new();
+
+        let (child0, child1) = match self.root {
+            Some(proxy) => match self.nodes[proxy.v].status {
+                NodeStatus::Parent(child0, child1) => (child0, child1),
+                _ => return pairs,
+            },
+            _ => return pairs
+        };
+
+        let mut seen = Vec::new();
+
+        self.compute_pairs_helper(&mut pairs, &mut seen, valid_pair_elements, child0, child1);
+
+        pairs
+    }
+
+    /*
+    void AABBTree::CrossChildren(Node *node)
+    {
+        if (!node->childrenCrossed)
+        {
+            ComputePairsHelper(node->children[0], 
+                            node->children[1]);
+            node->childrenCrossed = true;
+        }
+    }
+    */
+
+    fn cross_children(&self, pairs: &mut Vec<(Proxy, Proxy)>, seen: &mut Vec<Proxy>, valid_pair_elements: &[Proxy], proxy: Proxy) {
+        if !seen.contains(&proxy) {
+            seen.push(proxy);
+            if let NodeStatus::Parent(child0, child1) = self.nodes[proxy.v].status {
+                self.compute_pairs_helper(pairs, seen, valid_pair_elements, child0, child1);
+            }
+            else {
+                // TODO: encode LeafProxy and ParentProxy into the type system?
+                unreachable!("cross_children can't be called with leaf proxies")
+            }
+        }
+    }
+
+    /// TODO trocar self.nodes[proxy0.v] por uma função get_node
+    #[inline]
+    fn get_node(&self, proxy: Proxy) -> &Node<T, P> {
+        assert!(proxy.v < self.nodes.len(), "get_node called with invalid proxy");
+        &self.nodes[proxy.v]
+    }
+
+    fn compute_pairs_helper(&self, pairs: &mut Vec<(Proxy, Proxy)>, seen: &mut Vec<Proxy>, valid_pair_elements: &[Proxy], proxy0: Proxy, proxy1: Proxy) {
+
+        let node0 = self.get_node(proxy0);
+        let node1 = self.get_node(proxy1);
+
+        match (&node0.status, &node1.status) {
+            (&NodeStatus::Leaf(_), &NodeStatus::Leaf(_)) => {
+                if valid_pair_elements.contains(&proxy0) && valid_pair_elements.contains(&proxy1) &&  node0.aabb.overlaps(&node1.aabb) {
+                    pairs.push( (proxy0, proxy1) )
+                }
+            }
+            /*/ 1 branch / 1 leaf, 2 cross checks
+            else
+            {
+                CrossChildren(n1);
+                ComputePairsHelper(n0, n1->children[0]);
+                ComputePairsHelper(n0, n1->children[1]);
+            }*/
+            (&NodeStatus::Leaf(_), &NodeStatus::Parent(child0, child1)) => {
+                self.cross_children(pairs, seen, valid_pair_elements, proxy1);
+                self.compute_pairs_helper(pairs, seen, valid_pair_elements, proxy0, child0);
+                self.compute_pairs_helper(pairs, seen, valid_pair_elements, proxy0, child1);
+            }
+            /*
+            // 1 branch / 1 leaf, 2 cross checks
+            if (n1->IsLeaf())
+            {
+                CrossChildren(n0);
+                ComputePairsHelper(n0->children[0], n1);
+                ComputePairsHelper(n0->children[1], n1);
+            }
+            */
+            (&NodeStatus::Parent(child0, child1), &NodeStatus::Leaf(_)) => {
+                self.cross_children(pairs, seen, valid_pair_elements, proxy0);
+                self.compute_pairs_helper(pairs, seen, valid_pair_elements, child0, proxy1);
+                self.compute_pairs_helper(pairs, seen, valid_pair_elements, child1, proxy1);
+            }
+            (&NodeStatus::Parent(p0_child0, p0_child1), &NodeStatus::Parent(p1_child0, p1_child1)) => {
+                self.cross_children(pairs, seen, valid_pair_elements, proxy0);
+                self.cross_children(pairs, seen, valid_pair_elements, proxy1);
+                self.compute_pairs_helper(pairs, seen, valid_pair_elements, p0_child0, p1_child0);
+                self.compute_pairs_helper(pairs, seen, valid_pair_elements, p0_child0, p1_child1);
+                self.compute_pairs_helper(pairs, seen, valid_pair_elements, p0_child1, p1_child0);
+                self.compute_pairs_helper(pairs, seen, valid_pair_elements, p0_child1, p1_child1);
+            }
+        }
+
+    }
+
+    /*
+    void AABBTree::ComputePairsHelper(Node *n0, Node *n1)
+    {
+        if (n0->IsLeaf())
+        {
+            // 2 leaves, check proxies instead of fat AABBs
+            if (n1->IsLeaf())
+            {
+                if (n0->data->Collides(*n1->data))
+                    m_pairs.push_back(AllocatePair(n0->data->Collider(), 
+                                            n1->data->Collider()));
+            }
+            // 1 branch / 1 leaf, 2 cross checks
+            else
+            {
+                CrossChildren(n1);
+                ComputePairsHelper(n0, n1->children[0]);
+                ComputePairsHelper(n0, n1->children[1]);
+            }
+        }
+        else
+        {
+            // 1 branch / 1 leaf, 2 cross checks
+            if (n1->IsLeaf())
+            {
+                CrossChildren(n0);
+                ComputePairsHelper(n0->children[0], n1);
+                ComputePairsHelper(n0->children[1], n1);
+            }
+            // 2 branches, 4 cross checks
+            else
+            {
+                CrossChildren(n0);
+                CrossChildren(n1);
+                ComputePairsHelper(n0->children[0], n1->children[0]);
+                ComputePairsHelper(n0->children[0], n1->children[1]);
+                ComputePairsHelper(n0->children[1], n1->children[0]);
+                ComputePairsHelper(n0->children[1], n1->children[1]);
+            }
+        } // end of if (n0->IsLeaf())
+    }
+    */
 }
 
+/*pub struct CollisionPairIter<T, P, A> 
+    where
+    P: num::Float + num::FromPrimitive,
+    A: Into<MinMaxTuple<P>> + From<MinMaxTuple<P>> + Clone, {
+    tree: AabbTree<T, P, A>
+}
+
+impl<T, P, A> Iterator for CollisionPairIter<T, P, A> 
+    where
+    P: num::Float + num::FromPrimitive,
+    A: Into<MinMaxTuple<P>> + From<MinMaxTuple<P>> + Clone, {
+    type Item = (T, T);
+    fn next(&mut self) -> Option<Self::Item> {
+        unimplemented!()
+    }
+}*/
 
 #[cfg(feature = "test_tools")]
 #[cfg(test)]
@@ -696,23 +921,151 @@ mod tests {
     use super::{AabbTree, NodeStatus, NodeLink, Proxy};
     use super::aabb::Aabb;
     use quickcheck;
+    use rand::thread_rng;
+    use rand::{SeedableRng, StdRng};
+    use std::collections::HashSet;
+    use std::hash::Hash;
+    use std::fmt::Debug;
 
     type Vec3 = (f32, f32, f32);
     type A = (Vec3, Vec3);
 
     /// Returns either a random `AabbTree` or a `quickcheck::TestResult` if the tree is empty.
-    fn random_tree(aabbs: Vec<A>) -> Result<AabbTree<i32>, quickcheck::TestResult> {
+    fn random_tree(aabbs: Vec<A>) -> Result<(Vec<Proxy>, AabbTree<i32>), quickcheck::TestResult> {
         let mut tree = AabbTree::new();
+        let mut proxies = Vec::new();
 
         for (i, aabb) in aabbs.iter().filter(|aabb| aabb.is_valid()).enumerate() {
-            tree.create_proxy(*aabb, i as i32);
+            proxies.push(tree.create_proxy(*aabb, i as i32));
         }
 
         if tree.root.is_none() {
             Err(quickcheck::TestResult::discard())
         } else {
-            Ok(tree)
+            Ok((proxies, tree))
         }
+    }
+
+    fn test_structure<T>(t: &AabbTree<T>, n: Proxy) -> bool {
+        let node = &t.nodes[n.v];
+
+        if t.root.unwrap().v == n.v {
+            if let NodeLink::Parent(None) = node.link {
+            } else {
+                return false;
+            }
+        }
+
+        match node.status {
+            NodeStatus::Leaf(_) => node.height == 0,
+            NodeStatus::Parent(ref c1, ref c2) => {
+                match (&t.nodes[c1.v].link, &t.nodes[c2.v].link) {
+                    (&NodeLink::Parent(Some(p1)), &NodeLink::Parent(Some(p2))) => {
+                        (p1 == n) && (p2 == n) && test_structure(t, *c1) &&
+                            test_structure(t, *c2)
+                    }
+                    _ => false,
+                }
+            }
+        }
+    }
+
+    fn test_metrics<T>(t: &AabbTree<T>, n: Proxy) -> bool {
+        let node = &t.nodes[n.v];
+
+        if t.root.unwrap().v == n.v {
+            if let NodeLink::Parent(None) = node.link {
+            } else {
+                return false;
+            }
+        }
+
+        match node.status {
+            NodeStatus::Leaf(_) => node.height == 0,
+            NodeStatus::Parent(ref c1, ref c2) => {
+                let height1 = t.nodes[c1.v].height;
+                let height2 = t.nodes[c2.v].height;
+
+                if (1 + ::std::cmp::max(height1, height2)) != node.height {
+                    false
+                } else {
+                    let c_aabb = AabbTree::<i32>::combined_aabb(
+                        &t.nodes[c1.v].aabb,
+                        &t.nodes[c2.v].aabb,
+                    );
+
+                    c_aabb.min() == node.aabb.min() && c_aabb.max() == node.aabb.max() &&
+                        test_metrics(t, *c1) &&
+                        test_metrics(t, *c2)
+                }
+            }
+        }
+    }
+
+    fn naive_compute_pairs<T>(proxies: &[Proxy], tree: &AabbTree<T>) -> Vec<(Proxy, Proxy)> {
+        let mut ret = Vec::new();
+
+        for i in 0..proxies.len() {
+            for j in i+1..proxies.len() {
+                if tree.get_node(proxies[i]).aabb.overlaps(&tree.get_node(proxies[j]).aabb) {
+                    ret.push( (proxies[i], proxies[j]) );
+                }
+            }
+        }
+
+        ret
+    }
+
+    fn proxy_list_eq(a: &[(Proxy, Proxy)], b: &[(Proxy, Proxy)]) -> bool 
+    {
+        let a: HashSet<(Proxy, Proxy)> = a.iter().map(|&(a, b)| if a.v > b.v { (b, a) } else { (a, b) }).collect();
+        let b: HashSet<(Proxy, Proxy)> = b.iter().map(|&(a, b)| if a.v > b.v { (b, a) } else { (a, b) }).collect();
+
+        //println!("la {:?} {:?} {}", a, b, a == b);
+
+        a == b
+    }
+
+    #[test]
+    fn compute_pairs() {
+        fn test(aabbs: Vec<(A, A)>) -> quickcheck::TestResult {
+            let (proxies, mut tree) = match random_tree(aabbs.iter().map(|&(a, _)| a.clone()).collect()) {
+                Ok(tree) => tree,
+                Err(res) => return res,
+            };
+            
+            let a = tree.compute_pairs(&(0..1000).map(|i| Proxy{ v: i }).collect::<Vec<_>>());
+            let b = naive_compute_pairs(&proxies, &tree);
+
+            let t1 = a.len() == b.len();
+            let t2 = proxy_list_eq(&a, &b);
+
+            quickcheck::TestResult::from_bool(t1 && t2)
+        }
+
+        quickcheck::quickcheck(test as fn(Vec<(A, A)>) -> quickcheck::TestResult);
+    }
+
+    #[test]
+    fn movement() {
+        fn test(aabbs: Vec<(A, A)>) -> quickcheck::TestResult {
+            let (proxies, mut tree) = match random_tree(aabbs.iter().map(|&(a, _)| a.clone()).collect()) {
+                Ok(tree) => tree,
+                Err(res) => return res,
+            };
+
+            for (p, aabb) in proxies.iter().zip(aabbs.iter().map(|&(_, b)| b.clone())).filter(|&(_, aabb)| aabb.is_valid()) {
+                tree.set_aabb(*p, &aabb);
+            }
+
+            quickcheck::TestResult::from_bool(
+                test_structure(&tree, tree.root.expect("root")) &&
+                test_metrics(&tree, tree.root.expect("root")),
+            )
+        
+        }
+
+        quickcheck::quickcheck(test as fn(Vec<(A, A)>) -> quickcheck::TestResult);
     }
 
     /// This makes sure some constraints are respected in random trees. The constraints are:
@@ -724,74 +1077,52 @@ mod tests {
     #[test]
     fn validation() {
         fn tree_validation(aabbs: Vec<A>) -> quickcheck::TestResult {
-            let tree = match random_tree(aabbs) {
+            let (_, tree) = match random_tree(aabbs) {
                 Ok(tree) => tree,
                 Err(res) => return res,
             };
 
-            fn test_structure<T>(t: &AabbTree<T>, n: Proxy) -> bool {
-                let node = &t.nodes[n.v];
-
-                if t.root.unwrap().v == n.v {
-                    if let NodeLink::Parent(None) = node.link {
-                    } else {
-                        return false;
-                    }
-                }
-
-                match node.status {
-                    NodeStatus::Leaf(_) => node.height == 0,
-                    NodeStatus::Parent(ref c1, ref c2) => {
-                        match (&t.nodes[c1.v].link, &t.nodes[c2.v].link) {
-                            (&NodeLink::Parent(Some(p1)), &NodeLink::Parent(Some(p2))) => {
-                                (p1 == n) && (p2 == n) && test_structure(t, *c1) &&
-                                    test_structure(t, *c2)
-                            }
-                            _ => false,
-                        }
-                    }
-                }
-            }
-
-            fn test_metrics<T>(t: &AabbTree<T>, n: Proxy) -> bool {
-                let node = &t.nodes[n.v];
-
-                if t.root.unwrap().v == n.v {
-                    if let NodeLink::Parent(None) = node.link {
-                    } else {
-                        return false;
-                    }
-                }
-
-                match node.status {
-                    NodeStatus::Leaf(_) => node.height == 0,
-                    NodeStatus::Parent(ref c1, ref c2) => {
-                        let height1 = t.nodes[c1.v].height;
-                        let height2 = t.nodes[c2.v].height;
-
-                        if (1 + ::std::cmp::max(height1, height2)) != node.height {
-                            false
-                        } else {
-                            let c_aabb = AabbTree::<i32>::combined_aabb(
-                                &t.nodes[c1.v].aabb,
-                                &t.nodes[c2.v].aabb,
-                            );
-
-                            c_aabb.min() == node.aabb.min() && c_aabb.max() == node.aabb.max() &&
-                                test_metrics(t, *c1) &&
-                                test_metrics(t, *c2)
-                        }
-                    }
-                }
-            }
-
             quickcheck::TestResult::from_bool(
                 test_structure(&tree, tree.root.expect("root")) &&
-                    test_metrics(&tree, tree.root.expect("root")),
+                test_metrics(&tree, tree.root.expect("root")),
             )
         }
 
         quickcheck::quickcheck(tree_validation as fn(Vec<A>) -> quickcheck::TestResult);
+    }
+
+    /// Creates a random tree and then remove the proxies randomly
+    #[test]
+    fn random_destruction() {
+        use rand::Rng;
+
+        fn random_destruction_test(aabbs: Vec<A>) -> quickcheck::TestResult {
+            let (mut all, mut tree) = match random_tree(aabbs) {
+                Ok(tree) => tree,
+                Err(res) => return res,
+            };
+
+            /*let mut all = Vec::new();
+
+            tree.query_aabb( &((::std::f32::MIN, ::std::f32::MIN, ::std::f32::MIN), (::std::f32::MAX, ::std::f32::MAX, ::std::f32::MAX)), 
+            |v| {
+                all.push(v);
+                true
+            });*/
+
+            thread_rng().shuffle(&mut all);
+
+            for i in 0..all.len()/2 {
+                tree.destroy_proxy(all[i]);
+            }
+
+            quickcheck::TestResult::from_bool(
+                test_structure(&tree, tree.root.expect("root")) &&
+                test_metrics(&tree, tree.root.expect("root")),
+            )
+        }
+
+        quickcheck::quickcheck(random_destruction_test as fn(Vec<A>) -> quickcheck::TestResult);
     }
 
     /// Checks if every proxy has a status of `Leaf`
@@ -810,7 +1141,7 @@ mod tests {
                     return false;
                 }
                 match tree.nodes[v.v].status {
-                    NodeStatus::Leaf(t) => {
+                    NodeStatus::Leaf(Some(t)) => {
                         if i as i32 != t {
                             return false;
                         }
@@ -829,7 +1160,7 @@ mod tests {
     #[test]
     fn insertion_size() {
         fn tree_insertion(aabbs: Vec<A>) -> quickcheck::TestResult {
-            let tree = match random_tree(aabbs) {
+            let (_, tree) = match random_tree(aabbs) {
                 Ok(tree) => tree,
                 Err(res) => return res,
             };

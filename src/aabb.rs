@@ -20,7 +20,7 @@ fn vec3_num_mul<T: Copy + Mul<Output=T>>(v: (T, T, T), n: T) -> (T, T, T) {
 
 /// A trait that AABB types should implement to be used within the `AabbTree`. Has some
 /// convenience methods already defined.
-pub trait Aabb {
+pub trait Aabb: ::std::fmt::Debug {
     /// Defines the precision of the AABB (and consequently of the `AabbTree`). While
     /// any numerical type can be used, the tree might behave weirdly when given non
     /// float types.
@@ -44,7 +44,8 @@ pub trait Aabb {
     ///
     /// Panics in debug mode unless both AABBs are valid.
     fn contains<T: Aabb<Precision = Self::Precision>>(&self, other: &T) -> bool {
-        debug_assert!(self.is_valid() && other.is_valid(), "AABB is not valid");
+        //debug_assert!(self.is_valid() && other.is_valid(), "AABB is not valid");
+        debug_assert!(self.is_valid() && other.is_valid(), "({:?}, {:?}) AABB is not valid", self, other);
 
         //self.is_valid() && other.is_valid() &&
         self.min().0 <= other.min().0 && self.min().1 <= other.min().1 &&
@@ -58,7 +59,8 @@ pub trait Aabb {
     ///
     /// Panics in debug mode if the AABB is not valid.
     fn perimeter(&self) -> Self::Precision {
-        debug_assert!(self.is_valid(), "AABB is not valid");
+        //debug_assert!(self.is_valid(), "AABB is not valid");
+        debug_assert!(self.is_valid(), "({:?}) AABB is not valid", self);
 
         let wx = self.max().0 - self.min().0;
         let wy = self.max().1 - self.min().1;
@@ -75,7 +77,7 @@ pub trait Aabb {
     ///
     /// Panics in debug mode unless both AABBs are valid.
     fn overlaps<T: Aabb<Precision = Self::Precision>>(&self, other: &T) -> bool {
-        debug_assert!(self.is_valid() && other.is_valid(), "AABB is not valid");
+        debug_assert!(self.is_valid() && other.is_valid(), "({:?}, {:?}) AABB is not valid", self, other);
 
         //(self.is_valid() && other.is_valid()) &&
         !((other.min().0 > self.max().0 || other.max().0 < self.min().0) ||
@@ -108,7 +110,7 @@ pub trait Aabb {
     /// Tests wether an AABB is valid or not. AABBs are valid if their min value is smaller
     /// than their max value.
     fn is_valid(&self) -> bool {
-        self.min().0 <= self.max().0 && self.min().1 <= self.max().1 && self.min().2 <= self.max().2
+        self.min().0 < self.max().0 && self.min().1 < self.max().1 && self.min().2 < self.max().2
     }
 }
 
